@@ -38,6 +38,11 @@ export interface BunAdapterOptions {
    * runtime environment for the cache handlers.
    */
   cacheAuthToken?: string
+  /**
+   * Skip copying traced node_modules into the output directory.
+   * When true, the deployment must provide node_modules separately.
+   */
+  skipTracedAssets?: boolean
 }
 
 export interface BunStaticAsset {

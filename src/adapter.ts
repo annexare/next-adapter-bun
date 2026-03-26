@@ -407,6 +407,48 @@ async function seedPrerenderCache({
   }
 }
 
+async function stageTracedAssets({
+  outDir,
+  outputs,
+}: {
+  outDir: string
+  outputs: BuildCompleteContext['outputs']
+}): Promise<void> {
+  const allAssets = new Map<string, string>()
+
+  for (const output of [
+    ...outputs.pages,
+    ...outputs.pagesApi,
+    ...outputs.appPages,
+    ...outputs.appRoutes,
+    ...(outputs.middleware ? [outputs.middleware] : []),
+  ]) {
+    if (output.assets) {
+      for (const [relativePath, absolutePath] of Object.entries(
+        output.assets,
+      )) {
+        allAssets.set(relativePath, absolutePath)
+      }
+    }
+  }
+
+  if (allAssets.size === 0) return
+
+  const CONCURRENCY = 50
+  const entries = [...allAssets.entries()]
+
+  for (let i = 0; i < entries.length; i += CONCURRENCY) {
+    const batch = entries.slice(i, i + CONCURRENCY)
+    await Promise.all(
+      batch.map(async ([relativePath, absolutePath]) => {
+        const destPath = path.join(outDir, relativePath)
+        await mkdir(path.dirname(destPath), { recursive: true })
+        await Bun.write(destPath, Bun.file(absolutePath))
+      }),
+    )
+  }
+}
+
 async function onBuildComplete(
   ctx: BuildCompleteContext,
   configuredOutDir: string,
@@ -425,6 +467,10 @@ async function onBuildComplete(
     basePath: ctx.config.basePath,
     outDir,
   })
+
+  if (!options.skipTracedAssets) {
+    await stageTracedAssets({ outDir, outputs: ctx.outputs })
+  }
 
   const port = options.port ?? DEFAULT_PORT
   const hostname = options.hostname ?? DEFAULT_HOSTNAME

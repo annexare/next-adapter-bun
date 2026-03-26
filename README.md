@@ -8,6 +8,7 @@ Built on the official [Next.js Adapter API](https://nextjs.org/docs/app/api-refe
 
 ## Features
 
+- **Standalone-like output** — produces a self-contained `bun-dist/` with only the traced dependencies needed to run, similar to Next.js `output: 'standalone'` but optimized for Bun
 - **SQLite-based ISR cache** (`bun:sqlite`) — atomic writes, tag-based invalidation, revalidation locking
 - **Image optimization cache** — optimized images stored in SQLite with expiry tracking
 - **Two cache modes** — `http` (default, multi-process safe) or `sqlite` (direct access, lower overhead)
@@ -100,6 +101,7 @@ Options for `createBunAdapter()`:
 | `cacheHandlerMode` | `'sqlite' \| 'http'` | `'http'` | Cache transport mode |
 | `cacheEndpointPath` | `string` | `'/_adapter/cache'` | Internal cache endpoint (HTTP mode) |
 | `cacheAuthToken` | `string` | — | Cache endpoint auth token (HTTP mode) |
+| `skipTracedAssets` | `boolean` | `false` | Skip copying traced node_modules into output |
 
 ## Runtime Environment Variables
 
@@ -113,7 +115,11 @@ Options for `createBunAdapter()`:
 
 ## Docker
 
-The adapter generates `bun-dist/` which needs the `.next/` build output at runtime:
+Like Next.js `output: 'standalone'`, the adapter traces your app's dependencies at build time and copies only what's needed into `bun-dist/`. This keeps Docker images small — no full `node_modules` required.
+
+The `bun-dist/` directory contains the server entry, traced node_modules, runtime modules, static assets, and prerender cache. You only need to copy `bun-dist/` and `.next/` into the release image.
+
+### Single-app repo
 
 ```dockerfile
 FROM oven/bun:1.3-alpine AS build
@@ -125,12 +131,31 @@ FROM oven/bun:1.3-alpine
 WORKDIR /app
 COPY --from=build /app/bun-dist ./bun-dist
 COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/node_modules ./node_modules
-ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app
+ENV NODE_ENV=production PORT=3000
 EXPOSE 3000
 CMD ["bun", "bun-dist/server.js"]
 ```
+
+### Monorepo (workspace)
+
+When the app lives in a subdirectory (e.g. `apps/web`), set `NEXT_PROJECT_DIR` so the server can find `.next/`:
+
+```dockerfile
+FROM oven/bun:1.3-alpine AS build
+WORKDIR /app
+COPY . .
+RUN bun install --frozen-lockfile && bun --bun next build --filter=web
+
+FROM oven/bun:1.3-alpine
+WORKDIR /app
+COPY --from=build /app/apps/web/bun-dist ./apps/web/bun-dist
+COPY --from=build /app/apps/web/.next ./apps/web/.next
+ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/apps/web
+EXPOSE 3000
+CMD ["bun", "apps/web/bun-dist/server.js"]
+```
+
+> In a single-app repo, `NEXT_PROJECT_DIR` defaults to the parent of `bun-dist/` and doesn't need to be set.
 
 ## How It Works
 
@@ -138,10 +163,11 @@ At build time (`next build`), the adapter:
 
 1. Hooks into `modifyConfig` to set up cache handler paths
 2. On `onBuildComplete`, processes all build outputs:
+   - Copies traced dependencies (node_modules, server manifests) to `bun-dist/`
    - Writes runtime modules to `bun-dist/runtime/`
    - Stages static assets to `bun-dist/static/`
    - Seeds prerender cache into `bun-dist/cache.db`
-   - Writes deployment manifest to `bun-dist/deployment-manifest.json`
+   - Writes deployment manifest and runtime config
    - Generates server entry at `bun-dist/server.js`
 
 At runtime, `bun-dist/server.js`:
