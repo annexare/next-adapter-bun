@@ -1,0 +1,57 @@
+{
+  "name": "next-adapter-bun",
+  "version": "0.1.0",
+  "description": "Next.js deployment adapter for Bun with SQLite-based ISR caching",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun run build:js && bun run build:types",
+    "build:js": "bun build src/index.ts --outdir dist --target bun --format esm --minify --external next --external sharp --external bun:sqlite",
+    "build:types": "tsc --emitDeclarationOnly",
+    "lint": "biome check --write .",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "next": ">=16.2.0"
+  },
+  "dependencies": {
+    "sharp": ">=0.33.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.9",
+    "@types/bun": "1.3.11",
+    "next": "16.2.1",
+    "typescript": "6.0.2"
+  },
+  "keywords": [
+    "nextjs",
+    "next",
+    "adapter",
+    "bun",
+    "sqlite",
+    "isr",
+    "cache",
+    "deployment",
+    "standalone"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/annexare/next-adapter-bun.git"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  }
+}
