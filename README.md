@@ -8,12 +8,10 @@ Built on the official [Next.js Adapter API](https://nextjs.org/docs/app/api-refe
 
 ## Features
 
-- **SQLite-based ISR cache** (`bun:sqlite`) — atomic writes, tag-based invalidation, revalidation locking. Replaces the default filesystem cache.
-- **Image optimization cache** — optimized images stored in SQLite with proper expiry tracking.
-- **Native Bun APIs** — uses `Bun.Transpiler`, `Bun.file()`, `Bun.write()`, `bun:sqlite` where possible.
-- **Two cache modes** — `sqlite` (direct, single-instance) or `http` (internal endpoint, multi-process safe).
-- **Standalone-compatible** — generates `bun-dist/` output alongside `.next/` build artifacts.
-- **Full Next.js feature coverage** — App Router, Pages Router, ISR, middleware, `next/image`, Server Actions, draft mode.
+- **SQLite-based ISR cache** (`bun:sqlite`) — atomic writes, tag-based invalidation, revalidation locking
+- **Image optimization cache** — optimized images stored in SQLite with expiry tracking
+- **Two cache modes** — `http` (default, multi-process safe) or `sqlite` (direct access, lower overhead)
+- **Full Next.js feature coverage** — App Router, Pages Router, ISR, middleware, `next/image`, Server Actions, draft mode
 
 ## Install
 
@@ -23,46 +21,60 @@ bun add next-adapter-bun
 
 ## Configure
 
+The package provides two ready-to-use presets and a factory for custom configuration.
+
+### Default (HTTP cache mode)
+
+Uses an internal HTTP endpoint for cache operations. Best for multi-worker or multi-process setups.
+
 ```ts
 // next.config.ts
-import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import type { NextConfig } from 'next'
 
-const require = createRequire(import.meta.url)
-
 const nextConfig: NextConfig = {
-  adapterPath: require.resolve('next-adapter-bun'),
+  adapterPath: fileURLToPath(import.meta.resolve('next-adapter-bun')),
 }
 
 export default nextConfig
 ```
 
-### With options
+### SQLite cache mode
 
-Create a custom adapter entry:
+Direct SQLite access with lower overhead. Best for single-instance deployments (Docker containers, single-process servers).
+
+```ts
+// next.config.ts
+import { fileURLToPath } from 'node:url'
+import type { NextConfig } from 'next'
+
+const nextConfig: NextConfig = {
+  adapterPath: fileURLToPath(import.meta.resolve('next-adapter-bun/sqlite')),
+}
+
+export default nextConfig
+```
+
+### Custom configuration
+
+For full control, create a custom adapter entry file:
 
 ```ts
 // bun-adapter.ts
 import { createBunAdapter } from 'next-adapter-bun'
 
 export default createBunAdapter({
-  port: 3000,
-  hostname: '0.0.0.0',
   cacheHandlerMode: 'sqlite',
+  deploymentHost: 'app.example.com',
 })
 ```
 
-Then point `adapterPath` at it:
-
 ```ts
 // next.config.ts
-import { createRequire } from 'node:module'
 import type { NextConfig } from 'next'
 
-const require = createRequire(import.meta.url)
-
 const nextConfig: NextConfig = {
-  adapterPath: require.resolve('./bun-adapter'),
+  adapterPath: new URL('./bun-adapter.ts', import.meta.url).pathname,
 }
 
 export default nextConfig
@@ -77,20 +89,17 @@ bun bun-dist/server.js
 
 ## Options
 
+Options for `createBunAdapter()`:
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `outDir` | `string` | `'bun-dist'` | Output directory for adapter build |
-| `port` | `number` | `3000` | Default listen port |
+| `port` | `number` | `3000` | Default listen port (overridden by `PORT` env) |
 | `hostname` | `string` | `'0.0.0.0'` | Default listen hostname |
 | `deploymentHost` | `string` | — | Canonical host for Server Actions CSRF |
 | `cacheHandlerMode` | `'sqlite' \| 'http'` | `'http'` | Cache transport mode |
 | `cacheEndpointPath` | `string` | `'/_adapter/cache'` | Internal cache endpoint (HTTP mode) |
 | `cacheAuthToken` | `string` | — | Cache endpoint auth token (HTTP mode) |
-
-### Cache modes
-
-- **`http`** (default) — cache handlers communicate via an internal HTTP endpoint. Works across process boundaries. Best for multi-worker setups.
-- **`sqlite`** — direct SQLite access. Lower overhead for single-instance deployments (Docker containers, single-process servers).
 
 ## Runtime Environment Variables
 
@@ -104,7 +113,7 @@ bun bun-dist/server.js
 
 ## Docker
 
-The adapter generates `bun-dist/` which is **not fully self-contained** — it needs the `.next/` build output at runtime:
+The adapter generates `bun-dist/` which needs the `.next/` build output at runtime:
 
 ```dockerfile
 FROM oven/bun:1.3-alpine AS build
@@ -129,7 +138,7 @@ At build time (`next build`), the adapter:
 
 1. Hooks into `modifyConfig` to set up cache handler paths
 2. On `onBuildComplete`, processes all build outputs:
-   - Transpiles runtime modules to `bun-dist/runtime/`
+   - Writes runtime modules to `bun-dist/runtime/`
    - Stages static assets to `bun-dist/static/`
    - Seeds prerender cache into `bun-dist/cache.db`
    - Writes deployment manifest to `bun-dist/deployment-manifest.json`
@@ -144,7 +153,7 @@ At runtime, `bun-dist/server.js`:
 
 ## Adapter API
 
-This package implements the [Next.js Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath), which provides:
+This package implements the [Next.js Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath):
 
 - **`modifyConfig`** — modify Next.js config at build time
 - **`onBuildComplete`** — process build outputs (routes, prerenders, static assets)
