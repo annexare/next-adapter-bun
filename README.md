@@ -1,3 +1,7 @@
+[![Monthly Downloads](https://img.shields.io/npm/dm/next-adapter-bun.svg)](https://www.npmjs.com/package/next-adapter-bun)
+[![NPM](https://img.shields.io/npm/v/next-adapter-bun.svg 'NPM package version')](https://www.npmjs.com/package/next-adapter-bun)
+[![CI](https://github.com/annexare/next-adapter-bun/actions/workflows/ci.yml/badge.svg)](https://github.com/annexare/next-adapter-bun/actions/workflows/ci.yml)
+
 # next-adapter-bun
 
 Next.js deployment adapter for [Bun](https://bun.sh) with SQLite-based ISR caching.

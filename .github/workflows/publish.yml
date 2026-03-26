@@ -22,7 +22,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build
       - run: bun run lint
-      - run: bun run prepare-publish
       - name: Publish
         run: |
           name=$(jq -r .name dist/package.json)
