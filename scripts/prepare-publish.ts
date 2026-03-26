@@ -17,6 +17,10 @@ const publishPkg = {
       import: './index.js',
       types: './index.d.ts',
     },
+    './sqlite': {
+      import: './sqlite.js',
+      types: './sqlite.d.ts',
+    },
   },
   peerDependencies: pkg.peerDependencies,
   dependencies: pkg.dependencies,
