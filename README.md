@@ -121,7 +121,7 @@ Options for `createBunAdapter()`:
 
 Like Next.js `output: 'standalone'`, the adapter traces your app's dependencies at build time and copies only what's needed into `bun-dist/`. This keeps Docker images small — no full `node_modules` required.
 
-The `bun-dist/` directory contains the server entry, traced node_modules, runtime modules, static assets, and prerender cache. You only need to copy `bun-dist/` and `.next/` into the release image.
+The `bun-dist/` directory is fully self-contained — it includes the server entry, `.next/` build output, traced node_modules, runtime modules, static assets, and prerender cache. Only one `COPY` needed in your Dockerfile.
 
 ### Single-app repo
 
@@ -134,15 +134,14 @@ RUN bun install --frozen-lockfile && bun --bun next build
 FROM oven/bun:1.3-alpine
 WORKDIR /app
 COPY --from=build /app/bun-dist ./bun-dist
-COPY --from=build /app/.next ./.next
-ENV NODE_ENV=production PORT=3000
+ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/bun-dist
 EXPOSE 3000
 CMD ["bun", "bun-dist/server.js"]
 ```
 
 ### Monorepo (workspace)
 
-When the app lives in a subdirectory (e.g. `apps/web`), set `NEXT_PROJECT_DIR` so the server can find `.next/`:
+When the app lives in a subdirectory (e.g. `apps/web`):
 
 ```dockerfile
 FROM oven/bun:1.3-alpine AS build
@@ -152,14 +151,13 @@ RUN bun install --frozen-lockfile && bun --bun next build --filter=web
 
 FROM oven/bun:1.3-alpine
 WORKDIR /app
-COPY --from=build /app/apps/web/bun-dist ./apps/web/bun-dist
-COPY --from=build /app/apps/web/.next ./apps/web/.next
-ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/apps/web
+COPY --from=build /app/apps/web/bun-dist ./bun-dist
+ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/bun-dist
 EXPOSE 3000
-CMD ["bun", "apps/web/bun-dist/server.js"]
+CMD ["bun", "bun-dist/server.js"]
 ```
 
-> In a single-app repo, `NEXT_PROJECT_DIR` defaults to the parent of `bun-dist/` and doesn't need to be set.
+> `NEXT_PROJECT_DIR` must point to `bun-dist/` so Next.js can find the `.next/` directory inside it.
 
 ## How It Works
 
