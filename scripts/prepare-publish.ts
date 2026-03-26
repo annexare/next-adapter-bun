@@ -2,7 +2,6 @@
  * Assembles a publishable dist/ directory with package.json, LICENSE, README.
  * Run after `bun run build` to prepare for `npm publish dist/`.
  */
-
 const pkg = await Bun.file('package.json').json()
 
 const publishPkg = {
@@ -34,3 +33,5 @@ await Bun.write('dist/LICENSE', Bun.file('LICENSE'))
 await Bun.write('dist/README.md', Bun.file('README.md'))
 
 console.log(`Prepared dist/ for publishing ${pkg.name}@${pkg.version}`)
+
+export {}
