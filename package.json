@@ -1,6 +1,6 @@
 {
   "name": "next-adapter-bun",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Next.js deployment adapter for Bun with SQLite-based ISR caching",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "bun run build:js && bun run build:types",
-    "build:js": "bun build src/index.ts --outdir dist --target bun --format esm --minify --external next --external sharp --external bun:sqlite",
+    "build:js": "bun run scripts/build.ts",
     "build:types": "tsc --emitDeclarationOnly",
     "lint": "biome check --write .",
     "prepare-publish": "bun run scripts/prepare-publish.ts",

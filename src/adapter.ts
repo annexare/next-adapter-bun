@@ -22,27 +22,23 @@ const DEFAULT_CACHE_ENDPOINT_PATH = '/_adapter/cache'
 const RUNTIME_NEXT_CONFIG_FILE = 'runtime-next-config.json'
 
 /**
- * Transpile all .ts runtime files to .js using Bun's transpiler.
- * This avoids needing a separate tsc build step for the adapter package.
+ * Copy pre-built runtime .js modules to the output directory.
+ * These are built during package build (`bun run build`).
  */
-async function transpileRuntimeModules(
-  sourceDir: string,
-  destDir: string,
-): Promise<void> {
+async function copyRuntimeModules(destDir: string): Promise<void> {
   if (!existsSync(destDir)) {
     mkdirSync(destDir, { recursive: true })
   }
-  const transpiler = new Bun.Transpiler({ loader: 'ts' })
+  const sourceDir = path.join(import.meta.dirname, 'runtime')
   const files = await readdir(sourceDir)
-
   for (const file of files) {
-    if (!file.endsWith('.ts')) continue
-    const source = await Bun.file(path.join(sourceDir, file)).text()
-    let js = transpiler.transformSync(source)
-    // Bun's transpiler preserves .ts import specifiers — rewrite to .js
-    js = js.replace(/from ['"](\.[^'"]*?)\.ts['"]/g, "from '$1.js'")
-    const jsFileName = file.replace(/\.ts$/, '.js')
-    await Bun.write(path.join(destDir, jsFileName), js)
+    if (!file.endsWith('.js')) continue
+    // Skip server.js — it's handled separately with path rewrites
+    if (file === 'server.js') continue
+    await Bun.write(
+      path.join(destDir, file),
+      Bun.file(path.join(sourceDir, file)),
+    )
   }
 }
 
@@ -201,14 +197,10 @@ function createRuntimeCacheConfig(
 }
 
 async function writeServerEntry(outDir: string): Promise<void> {
-  const sourcePath = path.join(import.meta.dirname, 'runtime', 'server.ts')
-  const sourceCode = await Bun.file(sourcePath).text()
-  const transpiler = new Bun.Transpiler({ loader: 'ts' })
-  let jsCode = transpiler.transformSync(sourceCode)
-  // Bun's transpiler preserves .ts import specifiers — rewrite to .js
-  jsCode = jsCode.replace(/from ['"](\.[^'"]*?)\.ts['"]/g, "from '$1.js'")
+  const serverJsPath = path.join(import.meta.dirname, 'runtime', 'server.js')
+  const serverJs = await Bun.file(serverJsPath).text()
   // Relocate runtime imports to ./runtime/ subdirectory
-  const runtimeServerCode = jsCode
+  const runtimeServerCode = serverJs
     .replace(
       /from ['"]\.\/cache-store\.js['"]/,
       "from './runtime/cache-store.js'",
@@ -221,9 +213,8 @@ async function writeServerEntry(outDir: string): Promise<void> {
 }
 
 async function stageRuntimeModules(outDir: string): Promise<void> {
-  const sourceDir = path.join(import.meta.dirname, 'runtime')
   const destDir = path.join(outDir, 'runtime')
-  await transpileRuntimeModules(sourceDir, destDir)
+  await copyRuntimeModules(destDir)
 }
 
 function flattenHeaders(
@@ -501,12 +492,11 @@ export function createBunAdapter(options: BunAdapterOptions = {}): NextAdapter {
       // Edge bundles do not need nextConfig.cacheHandlers imports injected.
       const handlerModules = getRuntimeHandlerModuleNames(options)
 
-      // Transpile runtime .ts modules to .js and stage them into the output dir
-      // so the path is inside the project tree (Turbopack rejects absolute paths
-      // that leave the project root). Uses Bun's built-in transpiler — no tsc needed.
+      // Copy pre-built runtime modules into the output dir so the path is
+      // inside the project tree (Turbopack rejects absolute paths that leave
+      // the project root).
       const runtimeDir = path.resolve(configuredOutDir, 'runtime')
-      const sourceDir = path.join(import.meta.dirname, 'runtime')
-      await transpileRuntimeModules(sourceDir, runtimeDir)
+      await copyRuntimeModules(runtimeDir)
       const incrementalCacheHandlerPath = path.resolve(
         configuredOutDir,
         'runtime',
