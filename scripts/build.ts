@@ -3,13 +3,16 @@
  * Runtime modules must remain as separate files — the adapter copies
  * them into the project's bun-dist/ at Next.js build time.
  */
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+
+const srcDir = 'src'
+const outDir = 'dist'
+
+await rm(outDir, { recursive: true, force: true })
 
 const transpiler = new Bun.Transpiler({ loader: 'ts' })
 const glob = new Bun.Glob('**/*.ts')
-const srcDir = 'src'
-const outDir = 'dist'
 
 for await (const file of glob.scan(srcDir)) {
   const source = await Bun.file(path.join(srcDir, file)).text()
