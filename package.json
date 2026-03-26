@@ -22,6 +22,8 @@
     "build:js": "bun build src/index.ts --outdir dist --target bun --format esm --minify --external next --external sharp --external bun:sqlite",
     "build:types": "tsc --emitDeclarationOnly",
     "lint": "biome check --write .",
+    "prepare-publish": "bun run scripts/prepare-publish.ts",
+    "release": "bun run build && bun run prepare-publish",
     "test": "bun test"
   },
   "peerDependencies": {

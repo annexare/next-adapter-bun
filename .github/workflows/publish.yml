@@ -1,15 +1,17 @@
-name: Publish
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
@@ -19,6 +21,16 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: bun install --frozen-lockfile
       - run: bun run build
-      - run: npm publish --provenance --access public
+      - run: bun run lint
+      - run: bun run prepare-publish
+      - name: Publish
+        run: |
+          name=$(jq -r .name dist/package.json)
+          version=$(jq -r .version dist/package.json)
+          if npm view "$name@$version" version 2>/dev/null; then
+            echo "⏭️  $name@$version already published, skipping"
+          else
+            npm publish dist/ --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
