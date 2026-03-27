@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { AdapterOutput, NextAdapter } from 'next'
 
@@ -407,179 +407,6 @@ async function seedPrerenderCache({
   }
 }
 
-/**
- * Read an `.nft.json` trace file and return resolved absolute paths.
- */
-async function readTraceFiles(
-  nftJsonPath: string,
-): Promise<Map<string, string>> {
-  const result = new Map<string, string>()
-  try {
-    const data = JSON.parse(await readFile(nftJsonPath, 'utf8')) as {
-      files?: string[]
-    }
-    if (!Array.isArray(data.files)) return result
-    const baseDir = path.dirname(nftJsonPath)
-    for (const relFile of data.files) {
-      const absPath = path.resolve(baseDir, relFile)
-      result.set(absPath, absPath)
-    }
-  } catch {
-    // Trace file may not exist (e.g. no instrumentation hook)
-  }
-  return result
-}
-
-/**
- * Copy traced dependencies into the output directory so `bun-dist/` is
- * self-contained. Includes per-route assets from the adapter API and
- * core server dependencies from `next-server.js.nft.json`.
- *
- * All paths are rebased relative to `projectDir` so the output works
- * for both monorepos and single-app repos:
- *   - `.next/server/...`   (server chunks and manifests)
- *   - `node_modules/...`   (traced dependencies like sharp, react-dom)
- */
-async function stageTracedAssets({
-  outDir,
-  distDir,
-  projectDir,
-  repoRoot,
-  outputs,
-}: {
-  outDir: string
-  distDir: string
-  projectDir: string
-  repoRoot: string
-  outputs: BuildCompleteContext['outputs']
-}): Promise<void> {
-  // Collect per-route assets (keys are relative to repoRoot)
-  const repoRelativeAssets = new Map<string, string>()
-  for (const output of [
-    ...outputs.pages,
-    ...outputs.pagesApi,
-    ...outputs.appPages,
-    ...outputs.appRoutes,
-    ...(outputs.middleware ? [outputs.middleware] : []),
-  ]) {
-    if (output.assets) {
-      for (const [relativePath, absolutePath] of Object.entries(
-        output.assets,
-      )) {
-        repoRelativeAssets.set(relativePath, absolutePath)
-      }
-    }
-  }
-
-  // Read next-server.js.nft.json for core runtime dependencies
-  // (sharp, react-dom, semver, etc. — not included in per-route assets
-  // when building with Turbopack)
-  const absDistDir = path.isAbsolute(distDir)
-    ? distDir
-    : path.join(projectDir, distDir)
-  const serverTrace = await readTraceFiles(
-    path.join(absDistDir, 'next-server.js.nft.json'),
-  )
-
-  // Merge: rebase all paths relative to projectDir
-  const allAssets = new Map<string, string>()
-
-  for (const [repoRelPath, absPath] of repoRelativeAssets) {
-    const absRepoPath = path.resolve(repoRoot, repoRelPath)
-    const projectRelPath = path.relative(projectDir, absRepoPath)
-    if (!projectRelPath.startsWith('..')) {
-      allAssets.set(projectRelPath, absPath)
-    }
-  }
-
-  for (const [absPath] of serverTrace) {
-    // Skip files inside the output directory (self-referential, e.g.
-    // cache handler registered during modifyConfig that points into outDir)
-    if (
-      absPath.startsWith(`${outDir}/`) ||
-      absPath.startsWith(`${outDir}${path.sep}`)
-    ) {
-      continue
-    }
-    const projectRelPath = path.relative(projectDir, absPath)
-    if (!projectRelPath.startsWith('..')) {
-      allAssets.set(projectRelPath, absPath)
-    } else {
-      // Files outside projectDir (e.g. hoisted node_modules in monorepo)
-      const repoRelPath = path.relative(repoRoot, absPath)
-      if (!repoRelPath.startsWith('..')) {
-        allAssets.set(repoRelPath, absPath)
-      }
-    }
-  }
-
-  // Copy the .next/server/ directory (Turbopack chunks, page entry points)
-  // and essential root manifests. These are not included in per-route assets
-  // or next-server.js.nft.json — they ARE the build output.
-  const serverDir = path.join(absDistDir, 'server')
-  const distRelToProject = path.relative(projectDir, absDistDir)
-  try {
-    const serverFiles = await readdir(serverDir, {
-      recursive: true,
-      withFileTypes: false,
-    })
-    for (const file of serverFiles as unknown as string[]) {
-      const absFile = path.join(serverDir, file)
-      // readdir with recursive returns relative paths, but we need to check
-      // if it's a file (not directory)
-      try {
-        const fileStat = await Bun.file(absFile).exists()
-        if (!fileStat) continue
-        const relPath = path.join(distRelToProject, 'server', file)
-        allAssets.set(relPath, absFile)
-      } catch {
-        // Skip directories or inaccessible files
-      }
-    }
-  } catch {
-    // serverDir may not exist
-  }
-
-  // Copy essential root manifests from .next/
-  const rootManifests = [
-    'BUILD_ID',
-    'build-manifest.json',
-    'app-path-routes-manifest.json',
-    'fallback-build-manifest.json',
-    'prerender-manifest.json',
-    'routes-manifest.json',
-    'required-server-files.json',
-    'images-manifest.json',
-    'package.json',
-  ]
-  for (const manifest of rootManifests) {
-    const absManifest = path.join(absDistDir, manifest)
-    try {
-      if (await Bun.file(absManifest).exists()) {
-        allAssets.set(path.join(distRelToProject, manifest), absManifest)
-      }
-    } catch {
-      // Manifest may not exist
-    }
-  }
-
-  if (allAssets.size === 0) return
-
-  const CONCURRENCY = 50
-  const entries = [...allAssets.entries()]
-
-  for (let i = 0; i < entries.length; i += CONCURRENCY) {
-    const batch = entries.slice(i, i + CONCURRENCY)
-    await Promise.all(
-      batch.map(async ([relativePath, absolutePath]) => {
-        const destPath = path.join(outDir, relativePath)
-        await mkdir(path.dirname(destPath), { recursive: true })
-        await Bun.write(destPath, Bun.file(absolutePath))
-      }),
-    )
-  }
-}
-
 async function onBuildComplete(
   ctx: BuildCompleteContext,
   configuredOutDir: string,
@@ -592,6 +419,7 @@ async function onBuildComplete(
   const generatedAt = new Date().toISOString()
   const pathnames = collectOutputPathnames(ctx.outputs)
 
+  // Stage static assets for direct serving
   const staticAssets = await stageStaticAssets({
     outputs: ctx.outputs,
     projectDir: ctx.projectDir,
@@ -599,15 +427,9 @@ async function onBuildComplete(
     outDir,
   })
 
-  if (!options.skipTracedAssets) {
-    await stageTracedAssets({
-      outDir,
-      distDir: ctx.distDir,
-      projectDir: ctx.projectDir,
-      repoRoot: ctx.repoRoot,
-      outputs: ctx.outputs,
-    })
-  }
+  // NOTE: Standalone output (.next/standalone/) and preload modules are
+  // copied by the post-build CLI (`next-adapter-bun package`) because
+  // onBuildComplete fires before Next.js generates the standalone directory.
 
   const port = options.port ?? DEFAULT_PORT
   const hostname = options.hostname ?? DEFAULT_HOSTNAME
@@ -625,6 +447,7 @@ async function onBuildComplete(
     hostname,
     previewProps,
     cacheRuntime,
+    preload: options.preload,
   })
 
   await writeJsonFile(
@@ -675,19 +498,22 @@ export function createBunAdapter(options: BunAdapterOptions = {}): NextAdapter {
       // Edge bundles do not need nextConfig.cacheHandlers imports injected.
       const handlerModules = getRuntimeHandlerModuleNames(options)
 
-      // Copy pre-built runtime modules into the output dir so the path is
-      // inside the project tree (Turbopack rejects absolute paths that leave
-      // the project root).
-      const runtimeDir = path.resolve(configuredOutDir, 'runtime')
+      // Copy pre-built runtime modules into a temporary location inside the
+      // project tree so Turbopack can resolve the cache handler. We use
+      // `.next/adapter-runtime/` which is inside the build dir and won't
+      // pollute the standalone output or the final bun-dist/.
+      const runtimeDir = path.resolve('.next', 'adapter-runtime')
       await copyRuntimeModules(runtimeDir)
       const incrementalCacheHandlerPath = path.resolve(
-        configuredOutDir,
-        'runtime',
+        runtimeDir,
         handlerModules.incremental,
       )
 
       return {
         ...config,
+        // Use standalone output for reliable file tracing — the adapter
+        // packages the standalone directory into a self-contained bun-dist/.
+        output: 'standalone' as const,
         ...(existingServerActions || allowedOrigins.length > 0
           ? {
               serverActions: {

@@ -1,9 +1,12 @@
 {
   "name": "next-adapter-bun",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Next.js deployment adapter for Bun with SQLite-based ISR caching",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "next-adapter-bun": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "bun": "./src/index.ts",

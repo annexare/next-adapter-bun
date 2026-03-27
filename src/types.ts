@@ -39,10 +39,14 @@ export interface BunAdapterOptions {
    */
   cacheAuthToken?: string
   /**
-   * Skip copying traced node_modules into the output directory.
-   * When true, the deployment must provide node_modules separately.
+   * Modules to copy into the output directory's `node_modules/`.
+   * Useful for including non-Next.js dependencies that need to be
+   * available at runtime (e.g. `['jsonl-logger/preload']`).
+   *
+   * Each entry is resolved from the project's `node_modules/` and
+   * the entire package directory is copied (not just the subpath).
    */
-  skipTracedAssets?: boolean
+  preload?: string[]
 }
 
 export interface BunStaticAsset {
@@ -89,6 +93,7 @@ export interface BunDeploymentManifest {
       endpointPath: string
       authToken: string | null
     } | null
+    preload?: string[] | null
   }
   staticAssets: BunStaticAsset[]
   summary: {

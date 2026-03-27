@@ -42,6 +42,7 @@ export function buildDeploymentManifest({
   hostname,
   previewProps,
   cacheRuntime,
+  preload,
 }: {
   adapterName: string
   adapterOutDir: string
@@ -53,6 +54,7 @@ export function buildDeploymentManifest({
   hostname: string
   previewProps?: NonNullable<BunDeploymentManifest['runtime']>['previewProps']
   cacheRuntime?: NonNullable<BunDeploymentManifest['runtime']>['cache']
+  preload?: string[]
 }): BunDeploymentManifest {
   return {
     schemaVersion: 1,
@@ -79,6 +81,7 @@ export function buildDeploymentManifest({
     runtime: {
       previewProps: previewProps ?? null,
       cache: cacheRuntime ?? null,
+      preload: preload?.length ? preload : null,
     },
     staticAssets,
     summary: {

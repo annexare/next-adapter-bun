@@ -11,14 +11,19 @@ const publishPkg = {
   author: pkg.author,
   license: pkg.license,
   type: pkg.type,
+  bin: {
+    'next-adapter-bun': './cli.js',
+  },
   exports: {
     '.': {
-      import: './index.js',
       types: './index.d.ts',
+      import: './index.js',
+      default: './index.js',
     },
     './sqlite': {
-      import: './sqlite.js',
       types: './sqlite.d.ts',
+      import: './sqlite.js',
+      default: './sqlite.js',
     },
   },
   peerDependencies: pkg.peerDependencies,

@@ -6,17 +6,21 @@
 
 Next.js deployment adapter for [Bun](https://bun.sh) with SQLite-based ISR caching.
 
+Produces a self-contained `bun-dist/` directory — similar to Next.js `output: 'standalone'` — with optimal build size and SQLite-based caching. Only `bun-dist/` needs to be copied to your Docker image.
+
 Built on the official [Next.js Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath) (stable in Next.js 16.2+). Based on the [reference Bun adapter](https://github.com/nextjs/adapter-bun) by the Next.js team.
 
 > **Note:** This package exists because the official adapter is not yet published to npm. It will be deprecated once the official adapter is available as an npm package.
 
 ## Features
 
-- **Standalone-like output** — produces a self-contained `bun-dist/` with only the traced dependencies needed to run, similar to Next.js `output: 'standalone'` but optimized for Bun
+- **Self-contained output** — `bun-dist/` includes everything needed to run: `.next/` build output, traced `node_modules/`, server entry, static assets, and SQLite cache
+- **Standalone tracing** — leverages Next.js `output: 'standalone'` for reliable dependency tracing, works in both monorepos and single-app repos
 - **SQLite-based ISR cache** (`bun:sqlite`) — atomic writes, tag-based invalidation, revalidation locking
 - **Image optimization cache** — optimized images stored in SQLite with expiry tracking
-- **Two cache modes** — `http` (default, multi-process safe) or `sqlite` (direct access, lower overhead)
-- **Full Next.js feature coverage** — App Router, Pages Router, ISR, middleware, `next/image`, Server Actions, draft mode
+- **Two cache modes** — `sqlite` (direct access, lower overhead) or `http` (default, multi-process safe)
+- **Preload support** — bundle runtime preload modules (e.g. loggers) into the output
+- **Full Next.js coverage** — App Router, Pages Router, ISR, middleware, `next/image`, Server Actions, draft mode
 
 ## Install
 
@@ -27,6 +31,22 @@ bun add next-adapter-bun
 ## Configure
 
 The package provides two ready-to-use presets and a factory for custom configuration.
+
+### SQLite cache mode (recommended)
+
+Direct SQLite access with lower overhead. Best for single-instance deployments (Docker containers, single-process servers).
+
+```ts
+// next.config.ts
+import { fileURLToPath } from 'node:url'
+import type { NextConfig } from 'next'
+
+const nextConfig: NextConfig = {
+  adapterPath: fileURLToPath(import.meta.resolve('next-adapter-bun/sqlite')),
+}
+
+export default nextConfig
+```
 
 ### Default (HTTP cache mode)
 
@@ -44,22 +64,6 @@ const nextConfig: NextConfig = {
 export default nextConfig
 ```
 
-### SQLite cache mode
-
-Direct SQLite access with lower overhead. Best for single-instance deployments (Docker containers, single-process servers).
-
-```ts
-// next.config.ts
-import { fileURLToPath } from 'node:url'
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
-  adapterPath: fileURLToPath(import.meta.resolve('next-adapter-bun/sqlite')),
-}
-
-export default nextConfig
-```
-
 ### Custom configuration
 
 For full control, create a custom adapter entry file:
@@ -71,6 +75,7 @@ import { createBunAdapter } from 'next-adapter-bun'
 export default createBunAdapter({
   cacheHandlerMode: 'sqlite',
   deploymentHost: 'app.example.com',
+  preload: ['jsonl-logger/preload'],
 })
 ```
 
@@ -87,10 +92,32 @@ export default nextConfig
 
 ## Build & Run
 
+The build is a two-step process:
+
 ```bash
+# 1. Build with Next.js (adapter hooks fire during build)
 bun --bun next build
+
+# 2. Package standalone output into bun-dist/
+next-adapter-bun package
+
+# Run
 bun bun-dist/server.js
 ```
+
+**Why two steps?** The adapter's `onBuildComplete` hook fires before Next.js generates the standalone directory. The `package` CLI bridges this gap by copying the standalone output into `bun-dist/` after the build completes.
+
+You can chain them in your build script:
+
+```json
+{
+  "scripts": {
+    "build": "next build && next-adapter-bun package"
+  }
+}
+```
+
+Or run the CLI in your Dockerfile after the build step.
 
 ## Options
 
@@ -105,7 +132,7 @@ Options for `createBunAdapter()`:
 | `cacheHandlerMode` | `'sqlite' \| 'http'` | `'http'` | Cache transport mode |
 | `cacheEndpointPath` | `string` | `'/_adapter/cache'` | Internal cache endpoint (HTTP mode) |
 | `cacheAuthToken` | `string` | — | Cache endpoint auth token (HTTP mode) |
-| `skipTracedAssets` | `boolean` | `false` | Skip copying traced node_modules into output |
+| `preload` | `string[]` | — | Modules to bundle into output `node_modules/` |
 
 ## Runtime Environment Variables
 
@@ -119,9 +146,7 @@ Options for `createBunAdapter()`:
 
 ## Docker
 
-Like Next.js `output: 'standalone'`, the adapter traces your app's dependencies at build time and copies only what's needed into `bun-dist/`. This keeps Docker images small — no full `node_modules` required.
-
-The `bun-dist/` directory is fully self-contained — it includes the server entry, `.next/` build output, traced node_modules, runtime modules, static assets, and prerender cache. Only one `COPY` needed in your Dockerfile.
+The `bun-dist/` directory is fully self-contained. Copy its contents to your Docker image — no full `node_modules` required.
 
 ### Single-app repo
 
@@ -129,14 +154,16 @@ The `bun-dist/` directory is fully self-contained — it includes the server ent
 FROM oven/bun:1.3-alpine AS build
 WORKDIR /app
 COPY . .
-RUN bun install --frozen-lockfile && bun --bun next build
+RUN bun install --frozen-lockfile \
+    && bun --bun next build \
+    && next-adapter-bun package
 
 FROM oven/bun:1.3-alpine
 WORKDIR /app
-COPY --from=build /app/bun-dist ./bun-dist
-ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/bun-dist
+COPY --from=build /app/bun-dist/ ./
+ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app
 EXPOSE 3000
-CMD ["bun", "bun-dist/server.js"]
+CMD ["bun", "server.js"]
 ```
 
 ### Monorepo (workspace)
@@ -147,44 +174,79 @@ When the app lives in a subdirectory (e.g. `apps/web`):
 FROM oven/bun:1.3-alpine AS build
 WORKDIR /app
 COPY . .
-RUN bun install --frozen-lockfile && bun --bun next build --filter=web
+RUN bun install --frozen-lockfile \
+    && bun --bun next build --filter=web \
+    && cd apps/web && next-adapter-bun package
 
 FROM oven/bun:1.3-alpine
 WORKDIR /app
-COPY --from=build /app/apps/web/bun-dist ./bun-dist
-ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app/bun-dist
+COPY --from=build /app/apps/web/bun-dist/ ./
+ENV NODE_ENV=production PORT=3000 NEXT_PROJECT_DIR=/app
 EXPOSE 3000
-CMD ["bun", "bun-dist/server.js"]
+CMD ["bun", "server.js"]
 ```
 
-> `NEXT_PROJECT_DIR` must point to `bun-dist/` so Next.js can find the `.next/` directory inside it.
+> **Tip:** If your app needs runtime modules not traced by Next.js (e.g. a logger preload), either use the `preload` adapter option or add a separate `COPY` in your Dockerfile.
 
 ## How It Works
 
-At build time (`next build`), the adapter:
+### Build time
 
-1. Hooks into `modifyConfig` to set up cache handler paths
-2. On `onBuildComplete`, processes all build outputs:
-   - Copies traced dependencies (node_modules, server manifests) to `bun-dist/`
-   - Writes runtime modules to `bun-dist/runtime/`
+**Step 1 — `next build`** (adapter hooks):
+
+1. `modifyConfig` sets `output: 'standalone'` and injects the SQLite cache handler
+2. `onBuildComplete` processes build outputs:
    - Stages static assets to `bun-dist/static/`
    - Seeds prerender cache into `bun-dist/cache.db`
-   - Writes deployment manifest and runtime config
-   - Generates server entry at `bun-dist/server.js`
+   - Writes deployment manifest, runtime config, and server entry
+   - Copies runtime modules (cache handlers) to `bun-dist/runtime/`
 
-At runtime, `bun-dist/server.js`:
+**Step 2 — `next-adapter-bun package`** (CLI):
 
-1. Boots Next.js via `createNext()` from the project directory
-2. Creates an HTTP server with cache-control normalization
-3. Handles Server Actions body buffering (Bun timing workaround)
-4. Optionally serves an internal cache HTTP endpoint
+3. Copies `.next/standalone/` into `bun-dist/`:
+   - App files (`.next/`, `package.json`, local `node_modules/`)
+   - Hoisted `node_modules/` (merged in monorepos)
+   - Preload modules (if configured)
+4. Cleans up build-time caches and syncs runtime modules
+
+### Runtime
+
+`bun-dist/server.js`:
+
+1. Reads deployment manifest for config (port, hostname, cache mode)
+2. Boots Next.js via `createNext()` with runtime config overrides
+3. Creates an HTTP server with:
+   - Cache-control header normalization for deployed environments
+   - Server Actions body buffering (Bun compatibility workaround)
+   - Optional internal cache HTTP endpoint (HTTP mode)
+
+### Output structure
+
+```
+bun-dist/
+├── server.js                  # Server entry point
+├── .next/                     # Next.js build output (from standalone)
+│   ├── server/                # Server chunks, manifests
+│   ├── BUILD_ID
+│   └── ...
+├── node_modules/              # Traced dependencies (from standalone)
+│   ├── next/
+│   ├── react/
+│   ├── sharp/                 # (if used)
+│   └── ...
+├── runtime/                   # Adapter cache handlers
+├── static/                    # Static assets for direct serving
+├── cache.db                   # SQLite prerender cache (seeded)
+├── deployment-manifest.json   # Build metadata
+└── runtime-next-config.json   # Runtime config overrides
+```
 
 ## Adapter API
 
 This package implements the [Next.js Adapter API](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath):
 
-- **`modifyConfig`** — modify Next.js config at build time
-- **`onBuildComplete`** — process build outputs (routes, prerenders, static assets)
+- **`modifyConfig`** — sets `output: 'standalone'`, injects cache handler paths
+- **`onBuildComplete`** — processes build outputs (routes, prerenders, static assets)
 
 For more details, see the [Deploying to Platforms](https://nextjs.org/docs/app/guides/deploying-to-platforms) guide.
 

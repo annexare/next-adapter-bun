@@ -434,6 +434,7 @@ async function loadRuntimeNextConfig(): Promise<RuntimeConfigRecord> {
 }
 
 const runtimeNextConfig = await loadRuntimeNextConfig()
+
 const createNext = (await import('next')).default
 const app = createNext({
   dir: projectDir,
