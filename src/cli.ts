@@ -58,6 +58,19 @@ async function packageStandalone(cwd: string, outDirArg?: string) {
     ? path.join(standaloneRoot, appRelPath)
     : standaloneRoot
 
+  // The adapter wrote its own server.js during `next build`. The standalone
+  // tree contains Next's stock server.js at the same path, so hold onto ours
+  // and restore it after all copying is done.
+  const serverEntryPath = path.join(outDir, 'server.js')
+  if (!existsSync(serverEntryPath)) {
+    console.error(
+      `[adapter-bun] adapter server entry not found at ${serverEntryPath}.\n` +
+        'Did `next build` run with the adapter configured?',
+    )
+    process.exit(1)
+  }
+  const adapterServerEntry = await readFile(serverEntryPath, 'utf8')
+
   // Copy app files (.next/, package.json, local node_modules)
   if (existsSync(appDir)) {
     await cp(appDir, outDir, { recursive: true, force: true })
@@ -78,15 +91,8 @@ async function packageStandalone(cwd: string, outDirArg?: string) {
     }
   }
 
-  // Remove standalone-generated server.js — the adapter writes its own
-  const standaloneServerJs = path.join(outDir, 'server.js')
-  if (existsSync(standaloneServerJs)) {
-    // Only remove if the adapter already wrote one (check for adapter marker)
-    const content = await readFile(standaloneServerJs, 'utf8')
-    if (!content.includes('next-adapter-bun')) {
-      await rm(standaloneServerJs, { force: true })
-    }
-  }
+  // Restore the adapter server entry over Next's stock standalone server.js.
+  await Bun.write(serverEntryPath, adapterServerEntry)
 
   // Remove build-time cache (not needed at runtime)
   await rm(path.join(outDir, '.next', 'cache'), {
