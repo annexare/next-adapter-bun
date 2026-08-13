@@ -19,6 +19,13 @@ for await (const file of glob.scan(srcDir)) {
   let js = transpiler.transformSync(source)
   js = js.replace(/from ['"](\.[^'"]*?)\.ts['"]/g, "from '$1.js'")
 
+  // Bun.Transpiler drops the shebang. Without it the OS runs bin entries
+  // through /bin/sh, which fails on the first `import`.
+  const shebang = source.match(/^#![^\n]*/)?.[0]
+  if (shebang) {
+    js = `${shebang}\n${js}`
+  }
+
   const outPath = path.join(outDir, file.replace(/\.ts$/, '.js'))
   await mkdir(path.dirname(outPath), { recursive: true })
   await Bun.write(outPath, js)
