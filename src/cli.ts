@@ -71,28 +71,31 @@ async function packageStandalone(cwd: string, outDirArg?: string) {
   }
   const adapterServerEntry = await readFile(serverEntryPath, 'utf8')
 
-  // Copy app files (.next/, package.json, local node_modules)
-  if (existsSync(appDir)) {
-    await cp(appDir, outDir, { recursive: true, force: true })
-    console.log(`[adapter-bun] copied standalone app files`)
-  }
-
-  // In monorepos, merge hoisted node_modules
-  if (appRelPath) {
-    const hoistedNodeModules = path.join(standaloneRoot, 'node_modules')
-    if (existsSync(hoistedNodeModules)) {
-      const destNodeModules = path.join(outDir, 'node_modules')
-      await mkdir(destNodeModules, { recursive: true })
-      await cp(hoistedNodeModules, destNodeModules, {
-        recursive: true,
-        force: false, // Don't overwrite local (app-level) modules
-      })
-      console.log(`[adapter-bun] merged hoisted node_modules`)
+  try {
+    // Copy app files (.next/, package.json, local node_modules)
+    if (existsSync(appDir)) {
+      await cp(appDir, outDir, { recursive: true, force: true })
+      console.log(`[adapter-bun] copied standalone app files`)
     }
-  }
 
-  // Restore the adapter server entry over Next's stock standalone server.js.
-  await Bun.write(serverEntryPath, adapterServerEntry)
+    // In monorepos, merge hoisted node_modules
+    if (appRelPath) {
+      const hoistedNodeModules = path.join(standaloneRoot, 'node_modules')
+      if (existsSync(hoistedNodeModules)) {
+        const destNodeModules = path.join(outDir, 'node_modules')
+        await mkdir(destNodeModules, { recursive: true })
+        await cp(hoistedNodeModules, destNodeModules, {
+          recursive: true,
+          force: false, // Don't overwrite local (app-level) modules
+        })
+        console.log(`[adapter-bun] merged hoisted node_modules`)
+      }
+    }
+  } finally {
+    // Restore the adapter server entry over Next's stock standalone server.js.
+    // In `finally` so a failed copy can never leave the stock server behind.
+    await Bun.write(serverEntryPath, adapterServerEntry)
+  }
 
   // Remove build-time cache (not needed at runtime)
   await rm(path.join(outDir, '.next', 'cache'), {
