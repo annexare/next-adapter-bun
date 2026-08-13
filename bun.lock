@@ -11,7 +11,7 @@
         "typescript": "6.0.2",
       },
       "peerDependencies": {
-        "next": ">=16.2.12",
+        "next": ">=16.2.12 <16.3.0",
       },
     },
   },
