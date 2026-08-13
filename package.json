@@ -28,7 +28,7 @@
     "lint": "biome check --write . && tsc --noEmit"
   },
   "peerDependencies": {
-    "next": ">=16.2.5"
+    "next": ">=16.2.12"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.9",
