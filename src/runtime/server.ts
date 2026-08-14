@@ -31,6 +31,14 @@ interface RuntimeSection {
   cache?: RuntimeCacheConfig | null
 }
 
+interface StaticAssetEntry {
+  pathname?: string
+  stagedPath?: string
+  sourceType?: string
+  contentType?: string | null
+  cacheControl?: string | null
+}
+
 interface DeploymentManifest {
   server?: {
     port?: number
@@ -42,6 +50,78 @@ interface DeploymentManifest {
     distDir?: string
   }
   runtime?: RuntimeSection | null
+  staticAssets?: StaticAssetEntry[]
+}
+
+interface ResolvedStaticAsset {
+  filePath: string
+  contentType: string | null
+  cacheControl: string | null
+}
+
+/**
+ * Next's standalone output omits `public/` and `.next/static/`, so a packaged
+ * bun-dist/ has to serve them itself or every client chunk and public file
+ * 404s once the output is deployed away from the project. Both are staged
+ * under `static/` at build time with content types and cache headers already
+ * resolved. Route HTML is deliberately excluded — those still go through Next
+ * so routing and ISR are not bypassed.
+ */
+function collectServableStaticAssets(
+  manifest: DeploymentManifest,
+  adapterDir: string,
+): Map<string, ResolvedStaticAsset> {
+  const assets = new Map<string, ResolvedStaticAsset>()
+  if (!Array.isArray(manifest.staticAssets)) {
+    return assets
+  }
+
+  for (const asset of manifest.staticAssets) {
+    const { pathname, stagedPath } = asset
+    if (typeof pathname !== 'string' || typeof stagedPath !== 'string') {
+      continue
+    }
+    if (
+      asset.sourceType !== 'public' &&
+      !pathname.startsWith('/_next/static/')
+    ) {
+      continue
+    }
+
+    assets.set(pathname, {
+      filePath: path.join(adapterDir, stagedPath),
+      contentType: asset.contentType ?? null,
+      cacheControl: asset.cacheControl ?? null,
+    })
+  }
+
+  return assets
+}
+
+async function serveStaticAsset(
+  res: ServerResponse,
+  asset: ResolvedStaticAsset,
+  isHeadRequest: boolean,
+): Promise<boolean> {
+  const file = Bun.file(asset.filePath)
+  if (!(await file.exists())) {
+    return false
+  }
+
+  const contentType = asset.contentType ?? file.type
+  const headers: Record<string, string> = {}
+  if (contentType) headers['content-type'] = contentType
+  if (asset.cacheControl) headers['cache-control'] = asset.cacheControl
+  headers['content-length'] = String(file.size)
+
+  res.writeHead(200, headers)
+  if (isHeadRequest) {
+    res.end()
+    return true
+  }
+
+  Readable.fromWeb(file.stream() as never).pipe(res)
+  return true
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -371,6 +451,8 @@ const protocol =
 // Next's forwarded action/redirect fetches rely on this internal origin.
 process.env.__NEXT_PRIVATE_ORIGIN = `${protocol}://${appHostname}:${port}`
 
+const servableStaticAssets = collectServableStaticAssets(manifest, adapterDir)
+
 const cacheRuntime = resolveCacheRuntimeConfig(manifest)
 if (cacheRuntime.handlerMode === 'http') {
   const cacheAuthToken =
@@ -435,6 +517,15 @@ async function loadRuntimeNextConfig(): Promise<RuntimeConfigRecord> {
 
 const runtimeNextConfig = await loadRuntimeNextConfig()
 
+// Next's config loader installs a webpack require-hook on every config load
+// and only tolerates it being absent when this variable is set — the same
+// signal Next's own standalone server uses. Turbopack builds don't trace
+// `next/dist/compiled/webpack/`, so without it a packaged bun-dist/ throws
+// `Cannot find module 'next/dist/compiled/webpack/webpack-lib'` at boot.
+// Setting it also short-circuits the on-disk config load, so no next.config
+// is needed at runtime and `modifyConfig` is not re-run in the container.
+process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(runtimeNextConfig)
+
 const createNext = (await import('next')).default
 const app = createNext({
   dir: projectDir,
@@ -454,15 +545,24 @@ const server = http.createServer(async (req, res) => {
     ...req.headers,
   }
 
-  if (cacheRuntime.handlerMode === 'http') {
-    const requestUrl = new URL(
-      req.url || '/',
-      process.env.__NEXT_PRIVATE_ORIGIN,
-    )
-    if (requestUrl.pathname === cacheRuntime.endpointPath) {
-      await handleCacheHttpRequest(req, res, getSharedPrerenderCacheStore(), {
-        authToken: process.env.BUN_ADAPTER_CACHE_HTTP_TOKEN,
-      })
+  const requestPathname = new URL(
+    req.url || '/',
+    process.env.__NEXT_PRIVATE_ORIGIN,
+  ).pathname
+
+  if (
+    cacheRuntime.handlerMode === 'http' &&
+    requestPathname === cacheRuntime.endpointPath
+  ) {
+    await handleCacheHttpRequest(req, res, getSharedPrerenderCacheStore(), {
+      authToken: process.env.BUN_ADAPTER_CACHE_HTTP_TOKEN,
+    })
+    return
+  }
+
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const asset = servableStaticAssets.get(requestPathname)
+    if (asset && (await serveStaticAsset(res, asset, req.method === 'HEAD'))) {
       return
     }
   }
